@@ -426,11 +426,11 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   if ((rc = config->env().valueAsInt(variable, &tmp, true, 1, 100000000))!=0) {
     return rc;
   }
-  unsigned packetCount = static_cast<unsigned>(tmp)*9/10;
-  if (packetCount<=0||(packetCount%RX_BURST_CAPACITY)!=0) {
+  if (tmp<=0||(tmp%RX_BURST_CAPACITY)!=0) {
       REINVENT_UTIL_LOG_ERROR_VARGS("%s must be a multiple of RXQ burst count %u\n", variable.c_str(), RX_BURST_CAPACITY);
       return -1;
   }
+  unsigned packetCount = static_cast<unsigned>(tmp)*8;
 
   //
   // Finally the main point: receiving packets!
@@ -443,7 +443,7 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
 
-  while(count<packetCount) {
+  while(!terminate || count>=packetCount) {
     //
     // Receive up to RX_BURST_CAPACITY packets
     //
@@ -474,8 +474,6 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
   uint64_t elapsedNs = timeDifference(start, now);
-
-  printf("lcoreId: %02d, rxqIndex: %02d: elsapsedNs: %lu, packetsReceived: %u\n", id, rxqIndex, elapsedNs, count);
 
   const int packetSize = sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr)+sizeof(TxMessage);
   double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(count);
