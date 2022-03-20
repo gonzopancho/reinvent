@@ -1044,31 +1044,31 @@ int Dpdk::InitAWS::enaUdp(const std::string& device, const std::string& envPrefi
   // Get TXQ threshold values
   //
   if (config->txqPolicy() != Dpdk::Names::OFF) {
-    Dpdk::Names::make(envPrefix, &variable, "%s", "TXQ_PTHRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "TXQ_PTHRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }
     config->setTxqPrefetchThresh(intValue);
 
-    Dpdk::Names::make(envPrefix, &variable, "%s", "TXQ_HTHRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "TXQ_HTHRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }
     config->setTxqHostThresh(intValue);
   
-    Dpdk::Names::make(envPrefix, &variable, "%s", "TXQ_WTHRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "TXQ_WTHRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }
     config->setTxqWriteBackThresh(intValue);
 
-    Dpdk::Names::make(envPrefix, &variable, "%s", "TXQ_RS_THRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "TXQ_RS_THRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }
     config->setTxqRsThresh(intValue);
 
-    Dpdk::Names::make(envPrefix, &variable, "%s", "TXQ_FREE_THRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "TXQ_FREE_THRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }
@@ -1079,25 +1079,25 @@ int Dpdk::InitAWS::enaUdp(const std::string& device, const std::string& envPrefi
   // Get RXQ threshold values
   //
   if (config->rxqPolicy() != Dpdk::Names::OFF) {
-    Dpdk::Names::make(envPrefix, &variable, "%s", "RXQ_PTHRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "RXQ_PTHRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }
     config->setRxqPrefetchThresh(intValue);
 
-    Dpdk::Names::make(envPrefix, &variable, "%s", "RXQ_HTHRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "RXQ_HTHRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }
     config->setRxqHostThresh(intValue);
 
-    Dpdk::Names::make(envPrefix, &variable, "%s", "RXQ_WTHRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "RXQ_WTHRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }
     config->setRxqWriteBackThresh(intValue);
 
-    Dpdk::Names::make(envPrefix, &variable, "%s", "RXQ_FREE_THRESH");
+    Dpdk::Names::make(prefix, &variable, "%s", "RXQ_FREE_THRESH");
     if ((rc = env->valueAsInt(variable, &intValue))!=0) {
       return rc;
     }

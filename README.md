@@ -30,13 +30,13 @@ environment variables. The library then works out RXQ/TXQ assignments from there
 * [Read about DPDK packet design for IPV4 UDP](https://github.com/rodgarrison/reinvent/blob/main/doc/aws_ena_packet_design.md)
 
 # Benchmarks
-[A better comparison is based on Cloudfare work](https://blog.cloudflare.com/how-to-receive-a-million-packets/). This demonstrates UDP code sending 72 byte packets which includes 32 bytes of payload. The maximum I was able to achieve was around 1.1 million packets/sec:
+DPDK seems to deliver good results based on a first test. [A starting comparison is based on Cloudfare work](https://blog.cloudflare.com/how-to-receive-a-million-packets/). This demonstrates UDP code sending 72 byte packets which includes 32 bytes of payload **through the kernel**. The maximum I was able to achieve was around 1.1 million packets/sec. This work hits one queue on the RX side. 
 
 ```
-# on sender machine:
+# on sender machine running two cores:
 $ sudo taskset -c 1,2 ./udpsender 172.31.68.106:432
 
-# on receiver machine:
+# on receiver machine running 3 receive threads:
 taskset -c 1,2,3 ./udpreceiver1 0.0.0.0:4321 3 1
   1.101M pps  33.596MiB / 281.820Mb 
   1.103M pps  33.662MiB / 282.376Mb
@@ -45,22 +45,10 @@ taskset -c 1,2,3 ./udpreceiver1 0.0.0.0:4321 3 1
   1.104M pps  33.684MiB / 282.563Mb <--- 1.104*1000000*32/1024/1024=33.6MiB/sec, 1.104*1000000*32*8/1000/1000=282.6 million bits/sec 
 ```
 
-All this work hits one queue on the RX side. However, that means DPDK is still an order of 10 slower than the Cloudfare kernel based work.
-
-**Amazon advertises 100Gbps for `c5n.metal` instances if ENA is enabled**. Per Amazon:
+Running the default `reinvent_dpdk_udp_integration_test.tsk` task with the default setup writing UDP packets with a payload size of 32 bytes on one core gives:
 
 ```
-This instance type supports the Elastic Fabric Adapter (EFA). EFAs support OS-bypass functionality, which enables High
-Performance Computing (HPC) and Machine Learning (ML) applications to communicate directly with the network interface
-hardware. EFAs provide lower latency and higher throughput than traditional TCP channels.
+lcoreId: 00, txqIndex: 00: elsapsedNs: 450459947, packetsQueued: 1000005, packetSizeBytes: 74, payloadSizeBytes: 32, pps: 2219964.297958, nsPerPkt: 450.457695, bytesPerSec: 164277358.048883, mbPerSec: 156.667097, mbPerSecPayloadOnly: 67.747934
 ```
 
-So perhaps there is hope. At this point in time, the second cut of performance testing may need to reflect improvements
-in one or all of the following:
-
-* bigger ring size
-* a different TXQ burst size
-* see if Amazon AWS ENA drivers will support RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE. Right now it does not
-* better TXQ threshhold management. Right now config uses default which programs in 0 for all threshhold values
-* force-set a different link speed. The code is not able to determine the link speed; both `rte_eth_link_get_nowait`. and `rte_eth_link_get` report `0x00` which does not correspond to `RTE_ETH_SPEED_NUM_` define not `RTE_ETH_SPEED_NUM_NONE`. After some testing via DPDK's `dpdk-testpmd` task, there seems to be no way to set or get a link speed. It seems unknowable and unsettable.
-* need to determine if ncat is somehow using multiple TXQs. The DPDK test uses one. As per above, `ncat` uses one TXQ but much larger packet sizes.
+This is 2x the performance on half the number of running cores.

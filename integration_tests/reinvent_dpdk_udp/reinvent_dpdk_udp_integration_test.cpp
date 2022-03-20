@@ -45,6 +45,7 @@ struct TxMessage {
   int      lcoreId;   // lcoreId which sent this message
   int      txqId;     // txqId which sent this message
   unsigned sequence;  // txqId's sequence number
+  char     pad[20];   // to fill out message to 32 bytes
 };
 
 static void handle_sig(int sig) {
@@ -397,13 +398,18 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
   uint64_t elapsedNs = timeDifference(start, now);
+
   double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(count);
+  double pps = static_cast<double>(1000000000)/rateNsPerPacket;
   double bytesPerSecond = static_cast<double>(count)*static_cast<double>(packetSize)/
     (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
-  double gbPerSecond = bytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024)/static_cast<double>(1024);
+  double mbPerSecond = bytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
+  double payloadBytesPerSecond = static_cast<double>(count)*static_cast<double>(sizeof(TxMessage))/
+    (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
+  double payloadMbPerSecond = payloadBytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
 
-  printf("lcoreId: %02d, txqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, nsPerPkt: %lf, bytesPerSec: %lf, gbPerSec: %lf\n", 
-    id, txqIndex, elapsedNs, count, packetSize, rateNsPerPacket, bytesPerSecond, gbPerSecond);
+  printf("lcoreId: %02d, txqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", 
+    id, txqIndex, elapsedNs, count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
 
   return 0;
 }
@@ -420,7 +426,7 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   if ((rc = config->env().valueAsInt(variable, &tmp, true, 1, 100000000))!=0) {
     return rc;
   }
-  unsigned packetCount = static_cast<unsigned>(tmp);
+  unsigned packetCount = static_cast<unsigned>(tmp)*9/10;
   if (packetCount<=0||(packetCount%RX_BURST_CAPACITY)!=0) {
       REINVENT_UTIL_LOG_ERROR_VARGS("%s must be a multiple of RXQ burst count %u\n", variable.c_str(), RX_BURST_CAPACITY);
       return -1;
@@ -437,8 +443,7 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
 
-  packetCount -=5;
-  while(!terminate || count==packetCount) {
+  while(count<packetCount) {
     //
     // Receive up to RX_BURST_CAPACITY packets
     //
@@ -471,6 +476,19 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   uint64_t elapsedNs = timeDifference(start, now);
 
   printf("lcoreId: %02d, rxqIndex: %02d: elsapsedNs: %lu, packetsReceived: %u\n", id, rxqIndex, elapsedNs, count);
+
+  const int packetSize = sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr)+sizeof(TxMessage);
+  double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(count);
+  double pps = static_cast<double>(1000000000)/rateNsPerPacket;
+  double bytesPerSecond = static_cast<double>(count)*static_cast<double>(packetSize)/
+    (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
+  double mbPerSecond = bytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
+  double payloadBytesPerSecond = static_cast<double>(count)*static_cast<double>(sizeof(TxMessage))/
+    (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
+  double payloadMbPerSecond = payloadBytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
+
+  printf("lcoreId: %02d, rxqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", 
+    id, rxqIndex, elapsedNs, count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
 
   return 0;
 }
