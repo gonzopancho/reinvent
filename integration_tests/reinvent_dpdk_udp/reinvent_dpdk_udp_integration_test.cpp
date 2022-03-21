@@ -27,6 +27,7 @@ unsigned RX_BURST_CAPACITY = 15;
 unsigned TX_BURST_CAPACITY = 15;
 
 unsigned SLEEP_TIME = 10;
+unsigned REPORT_COUNT = 1000000;
 
 //
 // See -P argument
@@ -155,6 +156,7 @@ void usageAndExit() {
   printf("                            this option helps RSS use more queues by changing cksum\n");
   printf("   -S <integer>             number of seconds to sleep after RX/TX work done before lcore exits\n");
   printf("                            default %d seconds. See https://github.com/amzn/amzn-drivers/issues/166\n", SLEEP_TIME);
+  printf("   -R <integer>             RXQ lcores report stats every <integer> packets received. default %d\n", REPORT_COUNT);
   exit(2);
 }
 
@@ -164,7 +166,7 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
   *isServer = true;
   prefix->clear();
 
-  while ((c = getopt (argc, argv, "m:p:t:r:PS:")) != -1) {
+  while ((c = getopt (argc, argv, "m:p:t:r:PS:R:")) != -1) {
     switch(c) {
       case 'm':
         if (strcmp(optarg, "server")==0) {
@@ -201,6 +203,13 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
           usageAndExit();
         }
         SLEEP_TIME = static_cast<unsigned>(n);
+        break;
+      case 'R':
+        n = atoi(optarg);
+        if (n<=0) {
+          usageAndExit();
+        }
+        REPORT_COUNT = static_cast<unsigned>(n);
         break;
       default:
         usageAndExit();
@@ -418,24 +427,9 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   const uint16_t deviceId = static_cast<uint16_t>(config->awsEnaConfig().deviceId());
 
   //
-  // Get number of packets expect to receive
-  //
-  int rc, tmp;
-  std::string variable;
-  Reinvent::Dpdk::Names::make(config->envPrefix(), &variable, "%s", "RXQ_PACKET_COUNT");
-  if ((rc = config->env().valueAsInt(variable, &tmp, true, 1, 100000000))!=0) {
-    return rc;
-  }
-  if (tmp<=0||(tmp%RX_BURST_CAPACITY)!=0) {
-      REINVENT_UTIL_LOG_ERROR_VARGS("%s must be a multiple of RXQ burst count %u\n", variable.c_str(), RX_BURST_CAPACITY);
-      return -1;
-  }
-  unsigned packetCount = static_cast<unsigned>(tmp)*8;
-
-  //
   // Finally the main point: receiving packets!
   //
-  printf("lcoreId %02d rxqIndex %02d listening for %u packets\n", id, rxqIndex, packetCount);
+  printf("lcoreId %02d rxqIndex %02d listening for packets\n", id, rxqIndex);
   
   unsigned count(0);
   std::vector<rte_mbuf*> mbuf(RX_BURST_CAPACITY);
@@ -443,7 +437,7 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
 
-  while(!terminate || count>=packetCount) {
+  while(!terminate) {
     //
     // Receive up to RX_BURST_CAPACITY packets
     //
@@ -468,25 +462,27 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
       rte_pktmbuf_free(mbuf[i]);
     }
 
-    count += rxCount;
+    if ((count += rxCount)>=REPORT_COUNT) {
+      struct timespec now;
+      clock_gettime(CLOCK_REALTIME, &now);
+      uint64_t elapsedNs = timeDifference(start, now);
+
+      const int packetSize = sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr)+sizeof(TxMessage);
+      double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(count);
+      double pps = static_cast<double>(1000000000)/rateNsPerPacket;
+      double bytesPerSecond = static_cast<double>(count)*static_cast<double>(packetSize)/
+        (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
+      double mbPerSecond = bytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
+      double payloadBytesPerSecond = static_cast<double>(count)*static_cast<double>(sizeof(TxMessage))/
+        (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
+      double payloadMbPerSecond = payloadBytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
+
+      printf("lcoreId: %02d, rxqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", 
+        id, rxqIndex, elapsedNs, count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
+    
+      count = 0;
+    }
   }
-
-  struct timespec now;
-  clock_gettime(CLOCK_REALTIME, &now);
-  uint64_t elapsedNs = timeDifference(start, now);
-
-  const int packetSize = sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr)+sizeof(TxMessage);
-  double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(count);
-  double pps = static_cast<double>(1000000000)/rateNsPerPacket;
-  double bytesPerSecond = static_cast<double>(count)*static_cast<double>(packetSize)/
-    (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
-  double mbPerSecond = bytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
-  double payloadBytesPerSecond = static_cast<double>(count)*static_cast<double>(sizeof(TxMessage))/
-    (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
-  double payloadMbPerSecond = payloadBytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
-
-  printf("lcoreId: %02d, rxqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", 
-    id, rxqIndex, elapsedNs, count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
 
   return 0;
 }
