@@ -27,7 +27,7 @@ unsigned RX_BURST_CAPACITY = 15;
 unsigned TX_BURST_CAPACITY = 15;
 
 unsigned SLEEP_TIME = 10;
-unsigned REPORT_COUNT = 1000000;
+unsigned REPORT_COUNT = 500000;
 
 //
 // See -P argument
@@ -186,6 +186,7 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
           usageAndExit();
         }
         TX_BURST_CAPACITY = static_cast<unsigned>(n);
+        printf("TX_BURST_CAPACITY set to %u\n", TX_BURST_CAPACITY);
         break;
       case 'r':
         n = atoi(optarg);
@@ -193,6 +194,7 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
           usageAndExit();
         }
         RX_BURST_CAPACITY = static_cast<unsigned>(n);
+        printf("RX_BURST_CAPACITY set to %u\n", RX_BURST_CAPACITY);
         break;
       case 'P':
         constantPorts=false;
@@ -203,6 +205,7 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
           usageAndExit();
         }
         SLEEP_TIME = static_cast<unsigned>(n);
+        printf("SLEEP_TIME set to %u\n", SLEEP_TIME);
         break;
       case 'R':
         n = atoi(optarg);
@@ -210,6 +213,7 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
           usageAndExit();
         }
         REPORT_COUNT = static_cast<unsigned>(n);
+        printf("REPORT_COUNT set to %u\n", REPORT_COUNT);
         break;
       default:
         usageAndExit();
@@ -292,7 +296,7 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   //
   unsigned count(0);
   unsigned sequence(0);
-  std::vector<rte_mbuf*> mbuf(TX_BURST_CAPACITY);
+  rte_mbuf* mbuf[TX_BURST_CAPACITY];
 
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
@@ -322,15 +326,9 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
       //
 
       //
-      // Unknown purpose
-      //
-      rte_pktmbuf_reset_headroom(mbuf[i]);
-
-      //
       // Prepare ether header
       //
       struct rte_ether_hdr *ethHdr = rte_pktmbuf_mtod_offset(mbuf[i], rte_ether_hdr*, 0);
-      assert(ethHdr);
       ethHdr->src_addr = srcMac;
       ethHdr->dst_addr = dstMac;
       ethHdr->ether_type = ethFlow;
@@ -339,7 +337,6 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
       // Prepare IPV4 header
       //
       rte_ipv4_hdr *ip4Hdr = rte_pktmbuf_mtod_offset(mbuf[i], rte_ipv4_hdr*, sizeof(rte_ether_hdr));
-      assert(ip4Hdr);
       ip4Hdr->ihl = 0x5;
       ip4Hdr->version = 0x04;
       ip4Hdr->type_of_service = 0;
@@ -357,7 +354,6 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
       //
       rte_udp_hdr *udpHdr = rte_pktmbuf_mtod_offset(mbuf[i], rte_udp_hdr*,
         sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr));
-      assert(udpHdr);
       udpHdr->src_port = srcPort;
       udpHdr->dst_port = dstPort;
       udpHdr->dgram_len = udpSize;
@@ -368,7 +364,6 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
       //
       TxMessage *payload = rte_pktmbuf_mtod_offset(mbuf[i], TxMessage*,
         sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr));
-      assert(payload);
       payload->lcoreId = id;
       payload->txqId = txqIndex;
       payload->sequence = sequence++;
@@ -397,7 +392,7 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
     unsigned sent(0);
     unsigned left(TX_BURST_CAPACITY);
     while (left) {
-      unsigned txCount = rte_eth_tx_burst(deviceId, txqIndex, mbuf.data()+sent, left);
+      unsigned txCount = rte_eth_tx_burst(deviceId, txqIndex, mbuf+sent, left);
       left -= txCount;
       sent += txCount;
       count += txCount;
@@ -442,23 +437,11 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
     // Receive up to RX_BURST_CAPACITY packets
     //
     uint16_t rxCount = rte_eth_rx_burst(deviceId, rxqIndex, mbuf.data(), RX_BURST_CAPACITY);
-    if (likely(rxCount==0)) {
+    if (unlikely(rxCount==0)) {
       continue;
     }
 
-    // Re-start clock on first packet reception
-    if (unlikely(count==0)) {
-      clock_gettime(CLOCK_REALTIME, &start);
-    }
-
     for (unsigned i=0; i<rxCount; ++i) {
-      //                                                                                                                
-      // Find payload and print it                                                                                      
-      //                                                                                                                
-      TxMessage *payload = rte_pktmbuf_mtod_offset(mbuf[i], TxMessage*,
-        sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr));
-      REINVENT_UTIL_LOG_INFO_VARGS("id %d rxqIndex %d packet: sender: lcoreId: %d, txqId: %d, sequence: %d\n",
-        id, rxqIndex, payload->lcoreId, payload->txqId, payload->sequence);
       rte_pktmbuf_free(mbuf[i]);
     }
 
@@ -481,6 +464,7 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
         id, rxqIndex, elapsedNs, count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
     
       count = 0;
+      clock_gettime(CLOCK_REALTIME, &start);
     }
   }
 
