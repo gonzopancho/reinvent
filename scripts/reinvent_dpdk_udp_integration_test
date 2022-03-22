@@ -18,7 +18,6 @@ fi
 
 if [[ "$2" == "perf" ]]
 then
-  ARGS="-P"
   TASK="../build/reinvent_dpdk_udp_opt_integration_test.tsk"
 fi
 
