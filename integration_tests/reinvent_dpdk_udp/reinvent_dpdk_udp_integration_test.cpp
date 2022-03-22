@@ -14,6 +14,7 @@
 #include <rte_udp.h>
 #include <rte_mbuf_ptype.h>
 #include <rte_rawdev.h>
+#include <rte_per_lcore.h>
 #pragma GCC diagnostic pop 
 
 #include <time.h>
@@ -24,7 +25,7 @@
 // Default burst capacities
 //
 unsigned RX_BURST_CAPACITY = 15;
-unsigned TX_BURST_CAPACITY = 15;
+const unsigned TX_BURST_CAPACITY = 8;
 
 unsigned SLEEP_TIME = 10;
 unsigned REPORT_COUNT = 500000;
@@ -48,6 +49,38 @@ struct TxMessage {
   unsigned sequence;  // txqId's sequence number
   char     pad[20];   // to fill out message to 32 bytes
 };
+
+struct LocalTxState {
+  rte_ether_addr  srcMac;
+  rte_ether_addr  dstMac;
+  uint16_t        srcPort;
+  uint16_t        dstPort;
+  uint32_t        count;
+  uint32_t        sent;
+  uint32_t        left;
+  uint32_t        packetCount;
+  uint16_t        i;
+  int             lcoreId;
+  int             txqId;
+  unsigned        sequence;
+}; 
+
+RTE_DEFINE_PER_LCORE(LocalTxState, localTxState __attribute__ ((aligned (64)))) = {
+  .srcMac       = {0},
+  .dstMac       = {0},
+  .srcPort      = 0,
+  .dstPort      = 0,
+  .count        = 0,
+  .sent         = 0,
+  .left         = 0,
+  .packetCount  = 0,
+  .i            = 0,
+  .lcoreId      = 0,
+  .txqId        = 0,
+  .sequence     = 0
+};
+
+static RTE_DEFINE_PER_LCORE(rte_mbuf *[8], TxBurstCache __attribute__ ((aligned (64))));
 
 static void handle_sig(int sig) {
   switch (sig) {
@@ -150,7 +183,6 @@ void usageAndExit() {
   printf("reinvent_dpdk_udp_integration_test.tsk -m <client|server> -p <env-var-prefix>\n");
   printf("   -m <client|server>       optional (default server). mode to run task in.\n");
   printf("   -p <string>              required: non-empty ENV variable prefx name with config\n");
-  printf("   -t <integer>             optional: per TXQ burst capacity default %d\n", TX_BURST_CAPACITY);
   printf("   -r <integer>             optional: per RXQ burst capacity default %d\n", RX_BURST_CAPACITY);
   printf("   -P                       increment src/dst ports for each TX packet sent\n");
   printf("                            this option helps RSS use more queues by changing cksum\n");
@@ -166,7 +198,7 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
   *isServer = true;
   prefix->clear();
 
-  while ((c = getopt (argc, argv, "m:p:t:r:PS:R:")) != -1) {
+  while ((c = getopt (argc, argv, "m:p:r:PS:R:")) != -1) {
     switch(c) {
       case 'm':
         if (strcmp(optarg, "server")==0) {
@@ -179,14 +211,6 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
         break;
       case 'p':
         *prefix = optarg;
-        break;
-      case 't':
-        n = atoi(optarg);
-        if (n<=0) {
-          usageAndExit();
-        }
-        TX_BURST_CAPACITY = static_cast<unsigned>(n);
-        printf("TX_BURST_CAPACITY set to %u\n", TX_BURST_CAPACITY);
         break;
       case 'r':
         n = atoi(optarg);
@@ -228,7 +252,18 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
 int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, unsigned packetCount) {
 
   assert(config);
-  assert(mbuf.size());
+
+  rte_mbuf **mbuf;
+  mbuf = RTE_PER_LCORE(TxBurstCache);
+
+  LocalTxState *state;
+  state = &RTE_PER_LCORE(localTxState);
+  state->packetCount = packetCount;
+  state->lcoreId = id;
+  state->txqId = txqIndex;
+  state->sequence = 0;
+
+  printf("sizeof(LocalTxState)==%lu\n", sizeof(LocalTxState));
 
   //
   // Device Id
@@ -249,14 +284,12 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   //
   // Convert src MAC address from string to binary
   //
-  rte_ether_addr srcMac;
-  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertSrcMac(&srcMac);
+  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertSrcMac(&(state->srcMac));
 
   //
   // Convert dst MAC address from string to binary
   //
-  rte_ether_addr dstMac;
-  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertDstMac(&dstMac);
+  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertDstMac(&(state->dstMac));
 
   //
   // Convert src IP address from string to binary
@@ -273,8 +306,8 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   //
   // UDP pseudo ports
   //
-  uint16_t srcPort = rte_cpu_to_be_16(static_cast<uint16_t>(config->awsEnaConfig().txq()[txqIndex].defaultRoute().srcPort()));
-  uint16_t dstPort = rte_cpu_to_be_16(static_cast<uint16_t>(config->awsEnaConfig().txq()[txqIndex].defaultRoute().dstPort()));
+  state->srcPort = static_cast<uint16_t>(config->awsEnaConfig().txq()[txqIndex].defaultRoute().srcPort());
+  state->dstPort = static_cast<uint16_t>(config->awsEnaConfig().txq()[txqIndex].defaultRoute().dstPort());
 
   //
   // Total all-in packet size sent
@@ -291,22 +324,15 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   //
   const uint16_t udpSize = rte_cpu_to_be_16(static_cast<uint16_t>(sizeof(rte_udp_hdr)+sizeof(TxMessage)));
 
-  //
-  // Finally the main point: transmitting packets!
-  //
-  unsigned count(0);
-  unsigned sequence(0);
-  rte_mbuf* mbuf[TX_BURST_CAPACITY];
-
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
  
-  while (sequence<packetCount) {
+  while (state->sequence<state->packetCount) {
     //
     // Allocate 'TX_BURST_CAPACITY' mbufs
     //
-    for(unsigned i=0; i<TX_BURST_CAPACITY; ++i) {
-      if ((mbuf[i] = rte_pktmbuf_alloc(pool))==0) {
+    for(state->i=0; state->i<TX_BURST_CAPACITY; ++state->i) {
+      if ((mbuf[state->i] = rte_pktmbuf_alloc(pool))==0) {
         printf("failed to allocate mbuf\n");
         return 0;
       }
@@ -315,7 +341,7 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
     //
     // Prepare and queue for write TX_BURST_CAPACITY packets
     //
-    for(unsigned i=0; i<TX_BURST_CAPACITY; ++i) {
+    for(state->i=0; state->i<TX_BURST_CAPACITY; ++state->i) {
       // Within a given mbuf:
       //
       //  +---> rte_pktmbuf_mtod_offset(mbuf, rte_ether_hdr*, 0) 
@@ -328,15 +354,15 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
       //
       // Prepare ether header
       //
-      struct rte_ether_hdr *ethHdr = rte_pktmbuf_mtod_offset(mbuf[i], rte_ether_hdr*, 0);
-      ethHdr->src_addr = srcMac;
-      ethHdr->dst_addr = dstMac;
+      struct rte_ether_hdr *ethHdr = rte_pktmbuf_mtod_offset(mbuf[state->i], rte_ether_hdr*, 0);
+      ethHdr->src_addr = state->srcMac;
+      ethHdr->dst_addr = state->dstMac;
       ethHdr->ether_type = ethFlow;
 
       //
       // Prepare IPV4 header
       //
-      rte_ipv4_hdr *ip4Hdr = rte_pktmbuf_mtod_offset(mbuf[i], rte_ipv4_hdr*, sizeof(rte_ether_hdr));
+      rte_ipv4_hdr *ip4Hdr = rte_pktmbuf_mtod_offset(mbuf[state->i], rte_ipv4_hdr*, sizeof(rte_ether_hdr));
       ip4Hdr->ihl = 0x5;
       ip4Hdr->version = 0x04;
       ip4Hdr->type_of_service = 0;
@@ -352,50 +378,52 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
       //
       // Prepare UDP header
       //
-      rte_udp_hdr *udpHdr = rte_pktmbuf_mtod_offset(mbuf[i], rte_udp_hdr*,
+      rte_udp_hdr *udpHdr = rte_pktmbuf_mtod_offset(mbuf[state->i], rte_udp_hdr*,
         sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr));
-      udpHdr->src_port = srcPort;
-      udpHdr->dst_port = dstPort;
+      udpHdr->src_port = rte_cpu_to_be_16(state->srcPort);
+      udpHdr->dst_port = rte_cpu_to_be_16(state->dstPort);
       udpHdr->dgram_len = udpSize;
       udpHdr->dgram_cksum = 0;
   
       //
       // Prepare TxMessage Payload
       //
-      TxMessage *payload = rte_pktmbuf_mtod_offset(mbuf[i], TxMessage*,
+      TxMessage *payload = rte_pktmbuf_mtod_offset(mbuf[state->i], TxMessage*,
         sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr));
-      payload->lcoreId = id;
-      payload->txqId = txqIndex;
-      payload->sequence = sequence++;
+      payload->lcoreId  = state->lcoreId;
+      payload->txqId    = state->txqId;
+      payload->sequence = ++state->sequence;
 
       //
       // Finalize mbuf in DPDK
       //
-      mbuf[i]->nb_segs = 1;
-      mbuf[i]->pkt_len = packetSize;
-      mbuf[i]->data_len = packetSize;
-      mbuf[i]->ol_flags = (RTE_MBUF_F_TX_IPV4|RTE_MBUF_F_TX_IP_CKSUM);
-      mbuf[i]->l2_len = sizeof(rte_ether_hdr);
-      mbuf[i]->l3_len = sizeof(rte_ipv4_hdr);
-      mbuf[i]->l4_len = sizeof(rte_udp_hdr);
-      mbuf[i]->packet_type = (RTE_PTYPE_L2_ETHER|RTE_PTYPE_L3_IPV4|RTE_PTYPE_L4_UDP);
+      mbuf[state->i]->nb_segs = 1;
+      mbuf[state->i]->pkt_len = packetSize;
+      mbuf[state->i]->data_len = packetSize;
+      mbuf[state->i]->ol_flags = (RTE_MBUF_F_TX_IPV4|RTE_MBUF_F_TX_IP_CKSUM);
+      mbuf[state->i]->l2_len = sizeof(rte_ether_hdr);
+      mbuf[state->i]->l3_len = sizeof(rte_ipv4_hdr);
+      mbuf[state->i]->l4_len = sizeof(rte_udp_hdr);
+      mbuf[state->i]->packet_type = (RTE_PTYPE_L2_ETHER|RTE_PTYPE_L3_IPV4|RTE_PTYPE_L4_UDP);
 
-      if (!constantPorts) {
-        ++srcPort;
-        ++dstPort;
+      if (++state->srcPort==0xfffe) {
+        state->srcPort = 1024;
+      }
+      if (++state->dstPort==0xfffe) {
+        state->dstPort = 1024;
       }
     }
 
     //
     // TX packets e.g. append to NIC's output queue to write to wire
     //
-    unsigned sent(0);
-    unsigned left(TX_BURST_CAPACITY);
-    while (left) {
-      unsigned txCount = rte_eth_tx_burst(deviceId, txqIndex, mbuf+sent, left);
-      left -= txCount;
-      sent += txCount;
-      count += txCount;
+    state->sent = 0;
+    state->left = TX_BURST_CAPACITY;
+    while (state->left) {
+      unsigned txCount = rte_eth_tx_burst(deviceId, txqIndex, mbuf+state->sent, state->left);
+      state->left -= txCount;
+      state->sent += txCount;
+      state->count += txCount;
     }
   }
 
@@ -403,17 +431,17 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   clock_gettime(CLOCK_REALTIME, &now);
   uint64_t elapsedNs = timeDifference(start, now);
 
-  double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(count);
+  double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(state->count);
   double pps = static_cast<double>(1000000000)/rateNsPerPacket;
-  double bytesPerSecond = static_cast<double>(count)*static_cast<double>(packetSize)/
+  double bytesPerSecond = static_cast<double>(state->count)*static_cast<double>(packetSize)/
     (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
   double mbPerSecond = bytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
-  double payloadBytesPerSecond = static_cast<double>(count)*static_cast<double>(sizeof(TxMessage))/
+  double payloadBytesPerSecond = static_cast<double>(state->count)*static_cast<double>(sizeof(TxMessage))/
     (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
   double payloadMbPerSecond = payloadBytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
 
   printf("lcoreId: %02d, txqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", 
-    id, txqIndex, elapsedNs, count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
+    id, txqIndex, elapsedNs, state->count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
 
   return 0;
 }
@@ -480,14 +508,10 @@ int clientEntryPoint(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config)
   int rc, tmp;
   std::string variable;
   Reinvent::Dpdk::Names::make(config->envPrefix(), &variable, "%s", "TXQ_PACKET_COUNT");
-  if ((rc = config->env().valueAsInt(variable, &tmp, true, 1, 100000000))!=0) {
+  if ((rc = config->env().valueAsInt(variable, &tmp, true, 1, 1000000000))!=0) {
     return rc;
   }
   unsigned packetCount = static_cast<unsigned>(tmp);
-  if (packetCount<=0||(packetCount%TX_BURST_CAPACITY)!=0) {
-      REINVENT_UTIL_LOG_ERROR_VARGS("%s must be a multiple of TXQ burst count %u\n", variable.c_str(), TX_BURST_CAPACITY);
-      return -1;
-  }
   
   //
   // Finally enter the main processing loop passing state collected here
