@@ -512,7 +512,7 @@ int clientEntryPoint(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config)
   }
   unsigned packetCount = static_cast<unsigned>(tmp);
   
-  perf_initialize();
+  perf_initialize(1);
 
   //
   // Finally enter the main processing loop passing state collected here

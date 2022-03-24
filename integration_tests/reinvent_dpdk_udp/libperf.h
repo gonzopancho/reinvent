@@ -28,7 +28,7 @@ struct read_format {
   } values[];
 };
 
-int perf_initialize();
+int perf_initialize(int cpu);
 int perf_on();
 int perf_off();
 int perf_read();

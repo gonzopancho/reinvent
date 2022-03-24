@@ -16,7 +16,7 @@
 
 static struct perf libperf;
 
-int perf_initialize() {
+int perf_initialize(int cpu) {
   struct perf_event_attr pea;
 
   memset(&pea, 0, sizeof(struct perf_event_attr));
@@ -27,7 +27,7 @@ int perf_initialize() {
   pea.exclude_kernel = 1;
   pea.exclude_hv = 1;
   pea.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
-  libperf.fd1 = syscall(__NR_perf_event_open, &pea, 0, -1, -1, 0);
+  libperf.fd1 = syscall(__NR_perf_event_open, &pea, 0, cpu, -1, 0);
   ioctl(libperf.fd1, PERF_EVENT_IOC_ID, &libperf.id1);
   ioctl(libperf.fd1, PERF_EVENT_IOC_ID, &libperf.id1);
 
@@ -39,7 +39,7 @@ int perf_initialize() {
   pea.exclude_kernel = 1;
   pea.exclude_hv = 1;
   pea.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
-  libperf.fd2 = syscall(__NR_perf_event_open, &pea, 0, -1, libperf.fd1, 0);
+  libperf.fd2 = syscall(__NR_perf_event_open, &pea, 0, cpu, libperf.fd1, 0);
   ioctl(libperf.fd2, PERF_EVENT_IOC_ID, &libperf.id2);
 
   memset(&pea, 0, sizeof(struct perf_event_attr));
@@ -50,7 +50,7 @@ int perf_initialize() {
   pea.exclude_kernel = 1;
   pea.exclude_hv = 1;
   pea.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
-  libperf.fd3 = syscall(__NR_perf_event_open, &pea, 0, -1, libperf.fd1, 0);
+  libperf.fd3 = syscall(__NR_perf_event_open, &pea, 0, cpu, libperf.fd1, 0);
   ioctl(libperf.fd3, PERF_EVENT_IOC_ID, &libperf.id3);
 
   memset(&pea, 0, sizeof(struct perf_event_attr));
@@ -61,7 +61,7 @@ int perf_initialize() {
   pea.exclude_kernel = 1;
   pea.exclude_hv = 1;
   pea.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
-  libperf.fd4 = syscall(__NR_perf_event_open, &pea, 0, -1, libperf.fd1, 0);
+  libperf.fd4 = syscall(__NR_perf_event_open, &pea, 0, cpu, libperf.fd1, 0);
   ioctl(libperf.fd4, PERF_EVENT_IOC_ID, &libperf.id4);
 
   memset(&pea, 0, sizeof(struct perf_event_attr));
@@ -72,7 +72,7 @@ int perf_initialize() {
   pea.exclude_kernel = 1;
   pea.exclude_hv = 1;
   pea.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
-  libperf.fd5 = syscall(__NR_perf_event_open, &pea, 0, -1, libperf.fd1, 0);
+  libperf.fd5 = syscall(__NR_perf_event_open, &pea, 0, cpu, libperf.fd1, 0);
   ioctl(libperf.fd5, PERF_EVENT_IOC_ID, &libperf.id5);
 
   ioctl(libperf.fd1, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
