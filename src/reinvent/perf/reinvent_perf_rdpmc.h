@@ -11,6 +11,7 @@
 //                the counter values as 'stop()-start()'. The detlas are added to a running total per counter.
 // 
 
+#include <stdio.h>
 #include <assert.h>
 #include <x86intrin.h>
 
@@ -76,6 +77,7 @@ public:
 
 // ACCESSORS
 inline
+__attribute__((optimize("O0")))
 unsigned long Rdpmc::readCounter(int cntr) {
   assert(cntr>=0&&cntr<=3);
   __asm __volatile("lfence");
@@ -175,19 +177,23 @@ unsigned long RdpmcSumDelta::sumDeltaCounter3() const {
 }
 
 inline
+__attribute__((optimize("O0")))
 void RdpmcSumDelta::start() {
-  d_lastCounter0Value = readCounter(0);
-  d_lastCounter1Value = readCounter(1);
-  d_lastCounter2Value = readCounter(2);
-  d_lastCounter3Value = readCounter(3);
+  __asm __volatile("lfence");
+  d_lastCounter0Value = __rdpmc(0);
+  d_lastCounter1Value = __rdpmc(1);
+  d_lastCounter2Value = __rdpmc(2);
+  d_lastCounter3Value = __rdpmc(3);
 }
 
 inline
+__attribute__((optimize("O0")))
 void RdpmcSumDelta::stop() {
-  d_sumDelteCounter0 += (readCounter(0)-d_lastCounter0Value);
-  d_sumDelteCounter1 += (readCounter(1)-d_lastCounter1Value);
-  d_sumDelteCounter2 += (readCounter(2)-d_lastCounter2Value);
-  d_sumDelteCounter3 += (readCounter(3)-d_lastCounter3Value);
+  __asm __volatile("lfence");
+  d_sumDelteCounter0 += (__rdpmc(0)-d_lastCounter0Value);
+  d_sumDelteCounter1 += (__rdpmc(1)-d_lastCounter1Value);
+  d_sumDelteCounter2 += (__rdpmc(2)-d_lastCounter2Value);
+  d_sumDelteCounter3 += (__rdpmc(3)-d_lastCounter3Value);
 }
 
 } // namespace Perf

@@ -34,7 +34,7 @@ set(SOURCES
 #
 set(OPT_TEST_TARGET_SECTION1 reinvent_perf_opt_sec1_test1.tsk)
 add_executable(${OPT_TEST_TARGET_SECTION1} ${SOURCES})
-target_compile_options(${OPT_TEST_TARGET_SECTION1} PUBLIC -O2)
+target_compile_options(${OPT_TEST_TARGET_SECTION1} PUBLIC -g -O2)
 target_compile_options(${OPT_TEST_TARGET_SECTION1} PUBLIC -Wno-unused-variable)                                               
 target_compile_options(${OPT_TEST_TARGET_SECTION1} PUBLIC -Wno-unused-parameter)
 target_include_directories(${OPT_TEST_TARGET_SECTION1} PUBLIC ../../src/reinvent)                                                   
@@ -60,10 +60,23 @@ target_link_libraries(${OPT_TEST_TARGET_SECTION2} PUBLIC ${DPDK_SELECTED_LIBRARI
 #
 set(OPT_TEST_TARGET_SECTION3 reinvent_perf_opt_sec3_test1.tsk)
 add_executable(${OPT_TEST_TARGET_SECTION3} ${SOURCES})
-target_compile_options(${OPT_TEST_TARGET_SECTION3} PUBLIC -O3)
+target_compile_options(${OPT_TEST_TARGET_SECTION3} PUBLIC -O2)
 target_compile_options(${OPT_TEST_TARGET_SECTION3} PUBLIC -Wno-unused-variable)                                               
 target_compile_options(${OPT_TEST_TARGET_SECTION3} PUBLIC -Wno-unused-parameter)
 target_include_directories(${OPT_TEST_TARGET_SECTION3} PUBLIC ../../src/reinvent)                                                   
 target_compile_definitions(${OPT_TEST_TARGET_SECTION3} PUBLIC NDEBUG)
 target_compile_definitions(${OPT_TEST_TARGET_SECTION3} PUBLIC PERF_SECTION3)
 target_link_libraries(${OPT_TEST_TARGET_SECTION3} PUBLIC ${DPDK_SELECTED_LIBRARIES})
+
+#
+# Build a test to micro-benchmark entire client loop
+#
+set(OPT_TEST_TARGET_SECTION_ALL reinvent_perf_opt_all_test1.tsk)
+add_executable(${OPT_TEST_TARGET_SECTION_ALL} ${SOURCES})
+target_compile_options(${OPT_TEST_TARGET_SECTION_ALL} PUBLIC -O2)
+target_compile_options(${OPT_TEST_TARGET_SECTION_ALL} PUBLIC -Wno-unused-variable)                                               
+target_compile_options(${OPT_TEST_TARGET_SECTION_ALL} PUBLIC -Wno-unused-parameter)
+target_include_directories(${OPT_TEST_TARGET_SECTION_ALL} PUBLIC ../../src/reinvent)                                                   
+target_compile_definitions(${OPT_TEST_TARGET_SECTION_ALL} PUBLIC NDEBUG)
+target_compile_definitions(${OPT_TEST_TARGET_SECTION_ALL} PUBLIC PERF_ALL)
+target_link_libraries(${OPT_TEST_TARGET_SECTION_ALL} PUBLIC ${DPDK_SELECTED_LIBRARIES})

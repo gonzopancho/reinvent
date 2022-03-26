@@ -47,19 +47,6 @@ struct TxMessage {
   char     pad[20];   // to fill out message to 32 bytes
 };
 
-struct LocalTxState {
-  rte_ether_addr  srcMac;
-  rte_ether_addr  dstMac;
-  uint16_t        srcPort;
-  uint16_t        dstPort;
-  uint32_t        srcIp;
-  uint32_t        dstIp;
-  uint32_t        sequence;
-  int32_t         lcoreId;
-  int32_t         txqId;
-  uint32_t        count;
-}; 
-
 static void handle_sig(int sig) {
   switch (sig) {
     case SIGINT:
@@ -198,10 +185,18 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
 }
 
 int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, unsigned packetCount) {
-  LocalTxState state __attribute__ ((aligned (64)));
-  memset(&state, 0, sizeof(LocalTxState));
-
-  printf("sizeof(LocalTxState)==%lu\n", sizeof(LocalTxState));
+  rte_ether_addr  srcMac __attribute__ ((aligned (64)));
+  rte_ether_addr  dstMac = {0};
+  uint16_t        srcPort(0);
+  uint16_t        dstPort(0);
+  uint32_t        srcIp(0);
+  uint32_t        dstIp(0);
+  uint32_t        sequence(0);
+  int32_t         lcoreId(0);
+  int32_t         txqId(0);
+  uint32_t        count(0);
+  rte_mbuf       *mbuf(0);
+  srcMac = {0};
 
   //
   // Device Id
@@ -222,28 +217,28 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   //
   // Convert src MAC address from string to binary
   //
-  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertSrcMac(&state.srcMac);
+  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertSrcMac(&srcMac);
 
   //
   // Convert dst MAC address from string to binary
   //
-  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertDstMac(&state.dstMac);
+  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertDstMac(&dstMac);
 
   //
   // Convert src IP address from string to binary
   //
-  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertSrcIp(&state.srcIp);
+  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertSrcIp(&srcIp);
 
   //
   // Convert dst IP address from string to binary
   //
-  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertDstIp(&state.dstIp);
+  config->awsEnaConfig().txq()[txqIndex].defaultRoute().convertDstIp(&dstIp);
 
   //
   // UDP pseudo ports
   //
-  state.srcPort = rte_cpu_to_be_16(static_cast<uint16_t>(config->awsEnaConfig().txq()[txqIndex].defaultRoute().srcPort()));
-  state.dstPort = rte_cpu_to_be_16(static_cast<uint16_t>(config->awsEnaConfig().txq()[txqIndex].defaultRoute().dstPort()));
+  srcPort = rte_cpu_to_be_16(static_cast<uint16_t>(config->awsEnaConfig().txq()[txqIndex].defaultRoute().srcPort()));
+  dstPort = rte_cpu_to_be_16(static_cast<uint16_t>(config->awsEnaConfig().txq()[txqIndex].defaultRoute().dstPort()));
 
   //
   // Total all-in packet size sent
@@ -262,17 +257,16 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
 
   const unsigned max = packetCount;
 
-  struct timespec start;
-  clock_gettime(CLOCK_REALTIME, &start);
-
-  state.lcoreId = id;
-  state.txqId = txqIndex;
-
-  rte_mbuf * mbuf(0);
+  lcoreId = id;
+  txqId = txqIndex;
 
   Reinvent::Perf::RdpmcSumDelta perf(false);
- 
-  while (state.count<max) {
+
+#ifdef PERF_ALL
+  perf.start();
+#endif
+
+  while (count<max) {
 #ifdef PERF_SECTION1
     perf.start();
 #endif
@@ -300,8 +294,8 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
     perf.start();
 #endif
     struct rte_ether_hdr *ethHdr = rte_pktmbuf_mtod_offset(mbuf, rte_ether_hdr*, 0);
-    ethHdr->src_addr = state.srcMac;
-    ethHdr->dst_addr = state.dstMac;
+    ethHdr->src_addr = srcMac;
+    ethHdr->dst_addr = dstMac;
     ethHdr->ether_type = ethFlow;
 
     //
@@ -317,16 +311,16 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
     ip4Hdr->time_to_live = IPDEFTTL;
     ip4Hdr->next_proto_id = IPPROTO_UDP;
     ip4Hdr->hdr_checksum = 0;
-    ip4Hdr->src_addr = state.srcIp;
-    ip4Hdr->dst_addr = state.dstIp;
+    ip4Hdr->src_addr = srcIp;
+    ip4Hdr->dst_addr = dstIp;
 
     //
     // Prepare UDP header
     //
     rte_udp_hdr *udpHdr = rte_pktmbuf_mtod_offset(mbuf, rte_udp_hdr*,
       sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr));
-    udpHdr->src_port = state.srcPort;
-    udpHdr->dst_port = state.dstPort;
+    udpHdr->src_port = srcPort;
+    udpHdr->dst_port = dstPort;
     udpHdr->dgram_len = udpSize;
     udpHdr->dgram_cksum = 0;
   
@@ -335,9 +329,9 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
     //
     TxMessage *payload = rte_pktmbuf_mtod_offset(mbuf, TxMessage*,
       sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr));
-    payload->lcoreId = state.lcoreId;
-    payload->txqId = state.txqId;
-    payload->sequence = ++state.sequence;
+    payload->lcoreId = lcoreId;
+    payload->txqId = txqId;
+    payload->sequence = ++sequence;
 
     //
     // Finalize mbuf in DPDK
@@ -357,19 +351,27 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
 #ifdef PERF_SECTION3
     perf.start();
 #endif
-    if (unlikely(0==rte_eth_tx_burst(deviceId, state.txqId, &mbuf, 1))) {
-      while(1!=rte_eth_tx_burst(deviceId, state.txqId, &mbuf, 1));
+    if (unlikely(0==rte_eth_tx_burst(deviceId, txqId, &mbuf, 1))) {
+      while(1!=rte_eth_tx_burst(deviceId, txqId, &mbuf, 1));
     }
-    ++state.count;
+    ++count;
 #ifdef PERF_SECTION3
     perf.stop();
 #endif
   }
 
-  printf("counter 0 average: %lf\n", static_cast<double>(perf.sumDeltaCounter0())/static_cast<double>(max));
-  printf("counter 1 average: %lf\n", static_cast<double>(perf.sumDeltaCounter1())/static_cast<double>(max));
-  printf("counter 2 average: %lf\n", static_cast<double>(perf.sumDeltaCounter2())/static_cast<double>(max));
-  printf("counter 3 average: %lf\n", static_cast<double>(perf.sumDeltaCounter3())/static_cast<double>(max));
+#ifdef PERF_ALL
+  perf.stop();
+  printf("counter0: all: %lu\n", perf.sumDeltaCounter0());
+  printf("counter1: all: %lu\n", perf.sumDeltaCounter1());
+  printf("counter2: all: %lu\n", perf.sumDeltaCounter2());
+  printf("counter3: all: %lu\n", perf.sumDeltaCounter3());
+#endif
+
+  printf("counter0 average: %lf\n", static_cast<double>(perf.sumDeltaCounter0())/static_cast<double>(max));
+  printf("counter1 average: %lf\n", static_cast<double>(perf.sumDeltaCounter1())/static_cast<double>(max));
+  printf("counter2 average: %lf\n", static_cast<double>(perf.sumDeltaCounter2())/static_cast<double>(max));
+  printf("counter3 average: %lf\n", static_cast<double>(perf.sumDeltaCounter3())/static_cast<double>(max));
 
   return 0;
 }
@@ -460,8 +462,9 @@ int clientEntryPoint(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config)
   
   //
   // Finally enter the main processing loop passing state collected here
-  //
-  return clientMainLoop(id, txqIndex, config, static_cast<unsigned>(packetCount));
+  clientMainLoop(id, txqIndex, config, static_cast<unsigned>(packetCount));
+
+  return 0;
 }
 
 int serverEntryPoint(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {

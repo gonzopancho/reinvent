@@ -107,6 +107,8 @@ int Perf::Rdpmc::wrmsr(unsigned int reg, int cpu, unsigned long data) {
   int fd;
   char msr_file_name[64];
 
+  printf("wrmsr reg 0x%04x cpu %02d data 0x%016lx\n", reg, cpu, data);
+
   sprintf(msr_file_name, "/dev/cpu/%d/msr", cpu);
   fd = open(msr_file_name, O_WRONLY);
   if (fd < 0) {
