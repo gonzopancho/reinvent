@@ -7,6 +7,7 @@
 // 
 
 #include <assert.h>
+#include <x86intrin.h>
 
 namespace Reinvent {
 namespace Perf {
@@ -15,26 +16,23 @@ class Rdpmc {
 public:
   // ENUM
   enum Event {
-    UNHALTED_CORE_CYCLES      = 0,
-    INSTRUCTIONS_RETIRED      = 1,
-    UNHALTED_REFERENCE_CYCLES = 2,
-    LLC_REFERENCES            = 3,
-    LLC_MISSES                = 4,
-    BRANCH_INSTRUCT_RETIRED   = 5,
-    BRANCH_MISSES_RETIRED     = 6
+    UNHALTED_CORE_CYCLES      = 0x003c,
+    INSTRUCTIONS_RETIRED      = 0x00c0,
+    LLC_REFERENCES            = 0x4f2e,
+    LLC_MISSES                = 0x412e,
   };
  
 private:
   // DATA
-  unsigned char *d_op;
   int            d_max;
   int            d_index;
   unsigned long *d_value;
 
 public:
-  Rdpmc(int count);
+  Rdpmc(int count, bool pin);
     // Create Rdpmc object to collect up to specified 'count' PMU measurements. The behavior is defined provided
-    // 'count>0'.
+    // 'count>0'. If 'pin' true, the caller's thread is pinned to the HW core it's running on. Note: pass 'pin=false'
+    // if caller's thread is already pinned.
  
   ~Rdpmc();
     // Destroy this object
@@ -43,86 +41,89 @@ public:
   int maxIndex() const;
     // Return 'count' provided at construction time.
 
-  int lastValueIndex() const;
+  int lastIndex() const;
     // Return -1 if there are no collected values otherwise return '0<=n' where 'n' is the zero based index of the
     // last value collected.
 
-  int value(int index, unsigned long *value, Event *event);
-    // Return 0 setting specified 'value' to the measurement at specified 'index' and specified 'event' describing the
-    // kind of event 'value' is and non-zero otherwise. The behavior is defined provided 'lastValueIndex()!=-1' and
-    // '0<=index<=lastValueIndex()'.
+  int value(int i, unsigned long *unhaltedCoreCycles, unsigned long *instRetired, unsigned long *llcReferences,
+    unsigned long *llcMisses) const;
+    // Return 0 setting specified 'instRetired, llcReferences, llcMisses' to the specified 'i'th snapshot values.
+    // The behavior is defined provided 'lastIndex()!=-1' and '0<=i<=lastIndex()'.
 
-  void startLLCMisses();
-    // Start counting LLC (last level cache) misses. Once run, caller should run code under test then immediately call
-    // 'endLLCMisses' to capture the number of LLC misses since start. The behavior is defined provided
-    // 'lastValueIndex()<maxIndex()' and any previous call to this method was logically stopped with 'endLLCMisses'.
-    // Note that the measurement is relative to the caller's CPU core.
+  int cpu() const;
+    // Return the zero-based HW core number the caller is running on
 
-  void endLLCMisses();
-    // Stop counting LLC (last level cache) misses and record number of LLC misses since the 'startLLCMisses' was run.
-    // Upon return the measurement may be retrived by passing 'lastValueIndex()' for the formal argument 'index' to the
-    // accessor 'value'. Note that the measurement is relative to the caller's CPU core.
+  // PRIVATE MANIPULATORS
+  int rdmsr(unsigned int reg, int cpu, unsigned long *value);
+    // Return zero if read from specified Intel PMU register 'reg' on specified 'cpu' current value writing it into
+    // 'value' and non-zero otherwise;
+  
+  int wrmsr(unsigned int reg, int cpu, unsigned long data);
+    // Return zero if wrote to specified Intel PMU register 'reg' on specified 'cpu' the specified value 'data' and
+    // non-zero otherwise
+ 
+  // MANIUPLATORS
+  int pinCpu();
+    // Return 0 if the caller's thread was pinned to the CPU returned by 'cpu()' and non-zero otherwise.
+
+  int snapshot(void); 
+    // Return 0 if the current value of all PMU counters is taken and cached and non-zero otherwise. Upon return
+    // 'lastIndex' will increase by one. The behavior is defined provided, prior to call, 'lastIndex()'
+    // is less than 'maxIndex()'-1.
+
+  unsigned long readCounter(int cntr);
+    // Read and return the current value of the specified '0<=cntr<=3' counter
 //
 };
 
 // CREATORS
 inline
-Rdpmc::Rdpmc(int count)
-: d_max(count)
-, d_index(-1)
-{
-  assert(count>0);
-  d_op = new unsigned char[count];
-  d_value = new unsigned long[count];
-  assert(d_op);
-  assert(d_value);
-}
-
-inline
 Rdpmc::~Rdpmc() {
-  if (d_op) {
-    delete [] d_op;
-  }
   if (d_value) {
     delete [] d_value;
   }
-  d_op = 0;
   d_value = 0;
 };
 
 // ACCESSORS
 inline
 int Rdpmc::maxIndex() const {
-  return d_index;
+  return d_max;
 }
 
 inline
-int Rdpmc::value(int index, unsigned long *value, Event *event) {
-  if (index>=0 && index<=d_index) {
-    *value = d_value[index];
-    *event = static_cast<Rdpmc::Event>(d_op[index]);
-    return 0;
-  }
-  return -1;
+int Rdpmc::lastIndex() const {
+  return (d_index==-1) ? -1 : ((d_index+1)>>2)-1;
 }
 
 inline
-void Rdpmc::startLLCMisses() {
-  unsigned long a, d, c;
-  c = (1<<30)+Event::LLC_MISSES;
-  __asm__ volatile("rdpmc" : "=a" (a), "=d" (d) : "c" (c));
-  c = ((unsigned long)a) | (((unsigned long)d) << 32);
-  d_op[++d_index] = Event::LLC_MISSES;
-  d_value[d_index] = c;
+int Rdpmc::value(int i, unsigned long *unhaltedCoreCycles, unsigned long *instRetired, unsigned long *llcReferences,
+    unsigned long *llcMisses) const {
+  assert(i>=0);
+  assert(i<d_max);
+  assert(lastIndex()!=-1);
+  assert(i<=lastIndex());
+  assert(unhaltedCoreCycles);
+  assert(instRetired);
+  assert(llcReferences);
+  assert(llcMisses);
+
+  i<<=2;
+
+  *unhaltedCoreCycles = d_value[i];
+  *instRetired = d_value[++i];
+  *llcReferences = d_value[++i];
+  *llcMisses = d_value[++i];
+
+  return 0;
 }
 
+// MANIPULATORS
 inline
-void Rdpmc::endLLCMisses() {
-  unsigned long a, d, c;
-  c = (1<<30)+Event::LLC_MISSES;
-  __asm__ volatile("rdpmc" : "=a" (a), "=d" (d) : "c" (c));
-  c = ((unsigned long)a) | (((unsigned long)d) << 32);
-  d_value[d_index] = c - d_value[d_index];
+unsigned long Rdpmc::readCounter(int cntr) {
+  assert(cntr>=0&&cntr<=3);
+  __asm __volatile("lfence");
+  return __rdpmc(cntr);
 }
 
 } // namespace Perf

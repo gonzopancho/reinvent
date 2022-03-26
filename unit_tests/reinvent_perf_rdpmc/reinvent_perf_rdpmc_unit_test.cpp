@@ -9,16 +9,20 @@ using namespace Reinvent;
 
 TEST(util_errno, basic) {  
   unsigned a;
-  Perf::Rdpmc perf(10);
-  perf.startLLCMisses();
-  for (unsigned i=0; i<1000000000; ++i) {
+  Perf::Rdpmc perf(10, true);
+  EXPECT_TRUE(perf.maxIndex()==10);
+  EXPECT_TRUE(perf.lastIndex()==-1);
+  perf.snapshot();
+  for (unsigned i=0; i<10000; ++i) {
     a+=1;
   }
-  perf.startLLCMisses();
-  unsigned long val;
-  Perf::Rdpmc::Event event;
-  perf.value(0, &val, &event);
-  printf("LLC misses: %lu\n", val);
+  perf.snapshot();
+  EXPECT_TRUE(perf.lastIndex()==1);
+  unsigned long c0,c1,c2,c3;
+  perf.value(0, &c0, &c1, &c2, &c3);
+  printf("index 0 -> c0 %lu c1 %lu c2 %lu c3 %lu\n", c0, c1, c2, c3); 
+  perf.value(1, &c0, &c1, &c2, &c3);
+  printf("index 1 -> c0 %lu c1 %lu c2 %lu c3 %lu\n", c0, c1, c2, c3); 
 }
 
 int main(int argc, char **argv) {                                                                                       
