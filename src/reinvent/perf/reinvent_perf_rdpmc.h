@@ -3,7 +3,12 @@
 // Purpose: Read and store Intel's Architectural Performance Events from its PMU (Performance Monitor Unit)
 //
 // Classes:
-//   Perf:::Rdpmc: 
+//   Perf::Rdpmc: Programs PMU counter 0=UNHALTED_CORE_CYCLES, 1=INSTRUCTIONS_RETIRED, 2=LLC_REFERENCES, 3=LLC_MISSES
+//                optionally pinning caller's thread the caller's current HW core. It provides an accessor to read the
+//                current value of any counter. Typically used as a base class.
+//
+//   Perf::RdpmcSumDelta: Building on 'Perf::Rdpmc' totals the differences in counters calculated as the delta in the
+//                the counter values as 'stop()-start()'. The detlas are added to a running total per counter.
 // 
 
 #include <assert.h>
@@ -12,47 +17,45 @@
 namespace Reinvent {
 namespace Perf {
 
+                    // ========================================
+                    // Class: Rdpmc 
+                    // ========================================
+
 class Rdpmc {
 public:
   // ENUM
   enum Event {
-    UNHALTED_CORE_CYCLES      = 0x003c,
-    INSTRUCTIONS_RETIRED      = 0x00c0,
-    LLC_REFERENCES            = 0x4f2e,
-    LLC_MISSES                = 0x412e,
+    // See https://github.com/rodgarrison/rdpmc for details on
+    // where these magic constants come from
+    UNHALTED_CORE_CYCLES      = 0x003c,     // counter 0 event
+    INSTRUCTIONS_RETIRED      = 0x00c0,     // counter 1 event
+    LLC_REFERENCES            = 0x4f2e,     // counter 2 event
+    LLC_MISSES                = 0x412e,     // counter 3 event
   };
  
-private:
-  // DATA
-  int            d_max;
-  int            d_index;
-  unsigned long *d_value;
-
-public:
-  Rdpmc(int count, bool pin);
-    // Create Rdpmc object to collect up to specified 'count' PMU measurements. The behavior is defined provided
-    // 'count>0'. If 'pin' true, the caller's thread is pinned to the HW core it's running on. Note: pass 'pin=false'
-    // if caller's thread is already pinned.
+  // CREATORS
+  Rdpmc(bool pin);
+    // Create Rdpmc object to track PMU events in four counters 0=UNHALTED_CORE_CYCLES, 1=INSTRUCTIONS_RETIRED,
+    // 2=LLC_REFERENCES, 3=LLC_MISSES. If 'pin' true, the caller's thread is pinned to the HW core it's running on.
+    // Set 'pin=false' if caller's thread is already pinned. The caller's thread must be pinned to a HW core since
+    // PMU counters are per core. Counters are initialized to zero and, upon return, the counters are running.
  
-  ~Rdpmc();
+  Rdpmc(const Rdpmc &other) = delete;
+    // Copy constructor not provided.
+
+  ~Rdpmc() = default;
     // Destroy this object
  
   // ACCESSORS
-  int maxIndex() const;
-    // Return 'count' provided at construction time.
-
-  int lastIndex() const;
-    // Return -1 if there are no collected values otherwise return '0<=n' where 'n' is the zero based index of the
-    // last value collected.
-
-  int value(int i, unsigned long *unhaltedCoreCycles, unsigned long *instRetired, unsigned long *llcReferences,
-    unsigned long *llcMisses) const;
-    // Return 0 setting specified 'instRetired, llcReferences, llcMisses' to the specified 'i'th snapshot values.
-    // The behavior is defined provided 'lastIndex()!=-1' and '0<=i<=lastIndex()'.
-
   int cpu() const;
     // Return the zero-based HW core number the caller is running on
 
+  unsigned long readCounter(int cntr);
+    // Read and return the current value of the specified '0<=cntr<=3' counter. Callers typically run this before the
+    // benchmark code then after. The difference in the counter values represents the number of events which occurred
+    // as the benchmark code ran.
+
+private:
   // PRIVATE MANIPULATORS
   int rdmsr(unsigned int reg, int cpu, unsigned long *value);
     // Return zero if read from specified Intel PMU register 'reg' on specified 'cpu' current value writing it into
@@ -61,69 +64,130 @@ public:
   int wrmsr(unsigned int reg, int cpu, unsigned long data);
     // Return zero if wrote to specified Intel PMU register 'reg' on specified 'cpu' the specified value 'data' and
     // non-zero otherwise
- 
-  // MANIUPLATORS
+
   int pinCpu();
     // Return 0 if the caller's thread was pinned to the CPU returned by 'cpu()' and non-zero otherwise.
 
-  int snapshot(void); 
-    // Return 0 if the current value of all PMU counters is taken and cached and non-zero otherwise. Upon return
-    // 'lastIndex' will increase by one. The behavior is defined provided, prior to call, 'lastIndex()'
-    // is less than 'maxIndex()'-1.
-
-  unsigned long readCounter(int cntr);
-    // Read and return the current value of the specified '0<=cntr<=3' counter
-//
-};
-
-// CREATORS
-inline
-Rdpmc::~Rdpmc() {
-  if (d_value) {
-    delete [] d_value;
-  }
-  d_value = 0;
+public:
+  // PUBLIC MANIPULATORS
+  const Rdpmc& operator=(const Rdpmc& rhs) = delete;
+    // Assignment operator not provided.
 };
 
 // ACCESSORS
-inline
-int Rdpmc::maxIndex() const {
-  return d_max;
-}
-
-inline
-int Rdpmc::lastIndex() const {
-  return (d_index==-1) ? -1 : ((d_index+1)>>2)-1;
-}
-
-inline
-int Rdpmc::value(int i, unsigned long *unhaltedCoreCycles, unsigned long *instRetired, unsigned long *llcReferences,
-    unsigned long *llcMisses) const {
-  assert(i>=0);
-  assert(i<d_max);
-  assert(lastIndex()!=-1);
-  assert(i<=lastIndex());
-  assert(unhaltedCoreCycles);
-  assert(instRetired);
-  assert(llcReferences);
-  assert(llcMisses);
-
-  i<<=2;
-
-  *unhaltedCoreCycles = d_value[i];
-  *instRetired = d_value[++i];
-  *llcReferences = d_value[++i];
-  *llcMisses = d_value[++i];
-
-  return 0;
-}
-
-// MANIPULATORS
 inline
 unsigned long Rdpmc::readCounter(int cntr) {
   assert(cntr>=0&&cntr<=3);
   __asm __volatile("lfence");
   return __rdpmc(cntr);
+}
+
+                    // ========================================
+                    // Class: RdpmcSumDelta
+                    // ========================================
+
+class RdpmcSumDelta: public Rdpmc {
+private:
+  unsigned long d_lastCounter0Value;    // value of counter 0 last time read
+  unsigned long d_lastCounter1Value;    // value of counter 1 last time read
+  unsigned long d_lastCounter2Value;    // value of counter 2 last time read
+  unsigned long d_lastCounter3Value;    // value of counter 3 last time read
+  unsigned long d_sumDelteCounter0;     // running sum of deltas between 'stop()-start()' for counter 0
+  unsigned long d_sumDelteCounter1;     // running sum of deltas between 'stop()-start()' for counter 1
+  unsigned long d_sumDelteCounter2;     // running sum of deltas between 'stop()-start()' for counter 2
+  unsigned long d_sumDelteCounter3;     // running sum of deltas between 'stop()-start()' for counter 3
+
+public:
+  // CREATORS
+  RdpmcSumDelta(bool pin);
+    // Create RdpmcSumDelta object to track PMU events as described in the base class default constructor.
+ 
+  RdpmcSumDelta(const Rdpmc &other) = delete;
+    // Copy constructor not provided.
+
+  ~RdpmcSumDelta() = default;
+    // Destroy this object
+ 
+  // ACCESSORS
+  unsigned long sumDeltaCounter0() const;
+    // Return the current sum of all the deltas taken between 'stop()-start()' for counter 0. See base class for
+    // what counter 0 represents.
+
+  unsigned long sumDeltaCounter1() const;
+    // Return the current sum of all the deltas taken between 'stop()-start()' for counter 1. See base class for
+    // what counter 1 represents.
+
+  unsigned long sumDeltaCounter2() const;
+    // Return the current sum of all the deltas taken between 'stop()-start()' for counter 2. See base class for
+    // what counter 2 represents.
+  
+  unsigned long sumDeltaCounter3() const;
+    // Return the current sum of all the deltas taken between 'stop()-start()' for counter 3. See base class for
+    // what counter 3 represents.
+
+public:
+  // PUBLIC MANIPULATORS
+  void start();
+    // Read and cache the current values of all four counters. Use with 'stop()'.
+
+  void stop();
+    // Read the current values of all four counters then add to the running sum by counter the difference of the
+    // current value minus the value cached when 'start()' was last called.
+
+  const RdpmcSumDelta& operator=(const RdpmcSumDelta& rhs) = delete;
+    // Assignment operator not provided.
+};
+
+// CREATORS
+inline
+RdpmcSumDelta::RdpmcSumDelta(bool pin)
+: Rdpmc(pin)
+, d_lastCounter0Value(0)
+, d_lastCounter1Value(0)
+, d_lastCounter2Value(0)
+, d_lastCounter3Value(0)
+, d_sumDelteCounter0(0)
+, d_sumDelteCounter1(0)
+, d_sumDelteCounter2(0)
+, d_sumDelteCounter3(0)
+{
+}
+
+// ACCESSORS
+inline
+unsigned long RdpmcSumDelta::sumDeltaCounter0() const {
+  return d_sumDelteCounter0;
+}
+
+inline
+unsigned long RdpmcSumDelta::sumDeltaCounter1() const {
+  return d_sumDelteCounter1;
+}
+
+inline
+unsigned long RdpmcSumDelta::sumDeltaCounter2() const {
+  return d_sumDelteCounter2;
+}
+  
+inline
+unsigned long RdpmcSumDelta::sumDeltaCounter3() const {
+  return d_sumDelteCounter3;
+}
+
+inline
+void RdpmcSumDelta::start() {
+  d_lastCounter0Value = readCounter(0);
+  d_lastCounter1Value = readCounter(1);
+  d_lastCounter2Value = readCounter(2);
+  d_lastCounter3Value = readCounter(3);
+}
+
+inline
+void RdpmcSumDelta::stop() {
+  d_sumDelteCounter0 += (readCounter(0)-d_lastCounter0Value);
+  d_sumDelteCounter1 += (readCounter(1)-d_lastCounter1Value);
+  d_sumDelteCounter2 += (readCounter(2)-d_lastCounter2Value);
+  d_sumDelteCounter3 += (readCounter(3)-d_lastCounter3Value);
 }
 
 } // namespace Perf

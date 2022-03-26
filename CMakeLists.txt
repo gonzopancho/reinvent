@@ -87,7 +87,7 @@ endif()
 #
 if(PERFORMANCE_TEST)
   message(STATUS "Performance tests enabled")
-  add_subdirectory(peformance_tests)
+  add_subdirectory(performance_tests)
 else()
   message(STATUS "Performance tests disabled")
 endif()

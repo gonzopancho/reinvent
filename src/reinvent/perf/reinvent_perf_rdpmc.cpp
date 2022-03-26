@@ -8,15 +8,8 @@
 
 namespace Reinvent {
 
-Perf::Rdpmc::Rdpmc(int count, bool pin)
-: d_max(count)                                                                                                          
-, d_index(-1)                                                                                                           
+Perf::Rdpmc::Rdpmc(bool pin)
 {                                                                                                                       
-  assert(count>0);
-  // There are four counters
-  d_value = new unsigned long[count*4];
-  assert(d_value);
-
   // Pin caller's thread if requested
   if (pin) {
     pinCpu();
@@ -24,25 +17,26 @@ Perf::Rdpmc::Rdpmc(int count, bool pin)
 
   int core = cpu();
 
-  wrmsr(0x38d, core, 0);                                                                                          
-  wrmsr(0x186, core, 0);                                                                                          
-  wrmsr(0x187, core, 0);                                                                                          
-  wrmsr(0x188, core, 0);                                                                                          
-  wrmsr(0x189, core, 0);                                                                                          
-  wrmsr(0x309, core, 0);                                                                                          
-  wrmsr(0x30a, core, 0);                                                                                          
-  wrmsr(0x30b, core, 0);                                                                                          
-  wrmsr(0xc1,  core, 0);                                                                                          
-  wrmsr(0xc2,  core, 0);                                                                                          
-  wrmsr(0xc3,  core, 0);                                                                                          
-  wrmsr(0xc4,  core, 0);                                                                                          
-  wrmsr(0x390, core, 0);                                                                                          
+  wrmsr(0x38d, core, 0);
+  wrmsr(0x186, core, 0);
+  wrmsr(0x187, core, 0);
+  wrmsr(0x188, core, 0);
+  wrmsr(0x189, core, 0);
+  wrmsr(0x309, core, 0);
+  wrmsr(0x30a, core, 0);
+  wrmsr(0x30b, core, 0);
+  wrmsr(0xc1,  core, 0);
+  wrmsr(0xc2,  core, 0);
+  wrmsr(0xc3,  core, 0);
+  wrmsr(0xc4,  core, 0);
+  wrmsr(0x390, core, 0);
   wrmsr(0x38f, core, 0x70000000f);
-
-  wrmsr(0x186, core, 0x41003c);                                                                                   
-  wrmsr(0x187, core, 0x4100c0);                                                                                   
-  wrmsr(0x188, core, 0x414f2e);                                                                                   
-  wrmsr(0x189, core, 0x41412e);
+  
+  const unsigned long base(0x410000);
+  wrmsr(0x186, core, base|Rdpmc::Event::UNHALTED_CORE_CYCLES);
+  wrmsr(0x187, core, base|Rdpmc::Event::INSTRUCTIONS_RETIRED);
+  wrmsr(0x188, core, base|Rdpmc::Event::LLC_REFERENCES);
+  wrmsr(0x189, core, base|Rdpmc::Event::LLC_MISSES);
 } 
 
 int Perf::Rdpmc::cpu() const {
@@ -141,19 +135,6 @@ int Perf::Rdpmc::wrmsr(unsigned int reg, int cpu, unsigned long data) {
   }
 
   close(fd);
-  return 0;
-}
-
-int Perf::Rdpmc::snapshot() {
-  assert(lastIndex()<maxIndex()-1);
-  ++d_index;
-  d_value[d_index] = readCounter(0);
-  ++d_index;
-  d_value[d_index] = readCounter(1);
-  ++d_index;
-  d_value[d_index] = readCounter(2);
-  ++d_index;
-  d_value[d_index] = readCounter(3);
   return 0;
 }
 

@@ -2,4 +2,3 @@ cmake_minimum_required(VERSION 3.16)
 
 add_subdirectory(reinvent_util_errno)
 add_subdirectory(reinvent_util_environment)
-add_subdirectory(reinvent_perf_rdpmc)
