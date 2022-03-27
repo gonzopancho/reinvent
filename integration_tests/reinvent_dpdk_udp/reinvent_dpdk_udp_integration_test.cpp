@@ -59,6 +59,7 @@ struct LocalTxState {
   int32_t         lcoreId;
   int32_t         txqId;
   uint32_t        count;
+  uint32_t        stalledTx;
 }; 
 
 static void handle_sig(int sig) {
@@ -354,7 +355,9 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
     mbuf->packet_type = (RTE_PTYPE_L2_ETHER|RTE_PTYPE_L3_IPV4|RTE_PTYPE_L4_UDP);
 
     if (unlikely(0==rte_eth_tx_burst(deviceId, state.txqId, &mbuf, 1))) {
-      while(1!=rte_eth_tx_burst(deviceId, state.txqId, &mbuf, 1));
+      do {
+        ++state.stalledTx;
+      } while(1!=rte_eth_tx_burst(deviceId, state.txqId, &mbuf, 1));
     }
     ++state.count;
 
@@ -377,8 +380,8 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
     (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));
   double payloadMbPerSecond = payloadBytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);
 
-  printf("lcoreId: %02d, txqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", 
-    id, txqIndex, elapsedNs, state.count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
+  printf("lcoreId: %02d, txqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf stalledTx %u\n", 
+    id, txqIndex, elapsedNs, state.count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond, state.stalledTx);
 
   return 0;
 }
