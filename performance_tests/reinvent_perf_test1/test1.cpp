@@ -27,8 +27,6 @@
 //
 unsigned RX_BURST_CAPACITY = 15;
 
-const unsigned TX_BURST_CAPACITY = 8;
-
 //
 // See -P argument
 //
@@ -198,7 +196,7 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   int32_t         txqId(0);
   uint32_t        count(0);
 
-  rte_mbuf       *mbuf[TX_BURST_CAPACITY] __rte_cache_aligned;
+  rte_mbuf       *mbuf __rte_cache_aligned;
   srcMac = {0};
   mbuf = {0};
 
@@ -277,11 +275,9 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
 #ifdef PERF_SECTION1
     perf.start();
 #endif
-    for (unsigned i=0; i<TX_BURST_CAPACITY; ++i) {
-      if ((mbuf = rte_pktmbuf_alloc(pool))==0) {
-        printf("failed to allocate mbuf\n");
-        return 0;
-      }
+    if (unlikely((mbuf = rte_pktmbuf_alloc(pool))==0)) {
+      printf("failed to allocate mbuf\n");
+      return 0;
     }
 #ifdef PERF_SECTION1
     perf.stop();
@@ -360,12 +356,10 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
 #ifdef PERF_SECTION3
     perf.start();
 #endif
-    unsigned left(TX_BURST_CAPACITY);
-    while (left) {
-      unsigned sent = rte_eth_tx_burst(deviceId, txqId, &mbuf+(TX_BURST_CAPACITY-left), left))) {
-      left -= sent;
+    if (unlikely(0==rte_eth_tx_burst(deviceId, txqId, &mbuf, 1))) {
+      while(1!=rte_eth_tx_burst(deviceId, txqId, &mbuf, 1));
     }
-    count += TX_BURST_CAPACITY;
+    ++count;
 #ifdef PERF_SECTION3
     perf.stop();
 #endif
@@ -388,16 +382,16 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   clock_gettime(CLOCK_REALTIME, &now);                                                                                  
   uint64_t elapsedNs = timeDifference(start, now);                                                                      
                                                                                                                         
-  double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(state.count);                             
+  double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(count);                             
   double pps = static_cast<double>(1000000000)/rateNsPerPacket;                                                         
-  double bytesPerSecond = static_cast<double>(state.count)*static_cast<double>(packetSize)/                             
+  double bytesPerSecond = static_cast<double>(count)*static_cast<double>(packetSize)/                             
     (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));                                                   
   double mbPerSecond = bytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);                              
-  double payloadBytesPerSecond = static_cast<double>(state.count)*static_cast<double>(sizeof(TxMessage))/               
+  double payloadBytesPerSecond = static_cast<double>(count)*static_cast<double>(sizeof(TxMessage))/               
     (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));                                                   
   double payloadMbPerSecond = payloadBytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);                
                                                                                                                         
-  printf("lcoreId: %02d, txqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", id, txqIndex, elapsedNs, state.count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
+  printf("lcoreId: %02d, txqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", id, txqIndex, elapsedNs, count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
 
   return 0;
 }
