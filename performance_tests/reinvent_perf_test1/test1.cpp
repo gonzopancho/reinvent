@@ -27,6 +27,8 @@
 //
 unsigned RX_BURST_CAPACITY = 15;
 
+const unsigned TX_BURST_CAPACITY = 8;
+
 //
 // See -P argument
 //
@@ -185,7 +187,7 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
 }
 
 int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, unsigned packetCount) {
-  rte_ether_addr  srcMac __attribute__ ((aligned (64)));
+  rte_ether_addr  srcMac __rte_cache_aligned;
   rte_ether_addr  dstMac = {0};
   uint16_t        srcPort(0);
   uint16_t        dstPort(0);
@@ -195,8 +197,10 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   int32_t         lcoreId(0);
   int32_t         txqId(0);
   uint32_t        count(0);
-  rte_mbuf       *mbuf(0);
+
+  rte_mbuf       *mbuf[TX_BURST_CAPACITY] __rte_cache_aligned;
   srcMac = {0};
+  mbuf = {0};
 
   //
   // Device Id
@@ -270,9 +274,11 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
 #ifdef PERF_SECTION1
     perf.start();
 #endif
-    if ((mbuf = rte_pktmbuf_alloc(pool))==0) {
-      printf("failed to allocate mbuf\n");
-      return 0;
+    for (unsigned i=0; i<TX_BURST_CAPACITY; ++i) {
+      if ((mbuf = rte_pktmbuf_alloc(pool))==0) {
+        printf("failed to allocate mbuf\n");
+        return 0;
+      }
     }
 #ifdef PERF_SECTION1
     perf.stop();
@@ -351,10 +357,12 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
 #ifdef PERF_SECTION3
     perf.start();
 #endif
-    if (unlikely(0==rte_eth_tx_burst(deviceId, txqId, &mbuf, 1))) {
-      while(1!=rte_eth_tx_burst(deviceId, txqId, &mbuf, 1));
+    unsigned left(TX_BURST_CAPACITY);
+    while (left) {
+      unsigned sent = rte_eth_tx_burst(deviceId, txqId, &mbuf+(TX_BURST_CAPACITY-left), left))) {
+      left -= sent;
     }
-    ++count;
+    count += TX_BURST_CAPACITY;
 #ifdef PERF_SECTION3
     perf.stop();
 #endif
