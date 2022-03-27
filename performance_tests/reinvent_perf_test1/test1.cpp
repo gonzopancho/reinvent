@@ -264,6 +264,9 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   lcoreId = id;
   txqId = txqIndex;
 
+  struct timespec start;                                                                                                
+  clock_gettime(CLOCK_REALTIME, &start);
+
   Reinvent::Perf::RdpmcSumDelta perf(false);
 
 #ifdef PERF_ALL
@@ -380,6 +383,21 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
   printf("counter1 average: %lf\n", static_cast<double>(perf.sumDeltaCounter1())/static_cast<double>(max));
   printf("counter2 average: %lf\n", static_cast<double>(perf.sumDeltaCounter2())/static_cast<double>(max));
   printf("counter3 average: %lf\n", static_cast<double>(perf.sumDeltaCounter3())/static_cast<double>(max));
+
+ struct timespec now;                                                                                                  
+  clock_gettime(CLOCK_REALTIME, &now);                                                                                  
+  uint64_t elapsedNs = timeDifference(start, now);                                                                      
+                                                                                                                        
+  double rateNsPerPacket = static_cast<double>(elapsedNs)/static_cast<double>(state.count);                             
+  double pps = static_cast<double>(1000000000)/rateNsPerPacket;                                                         
+  double bytesPerSecond = static_cast<double>(state.count)*static_cast<double>(packetSize)/                             
+    (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));                                                   
+  double mbPerSecond = bytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);                              
+  double payloadBytesPerSecond = static_cast<double>(state.count)*static_cast<double>(sizeof(TxMessage))/               
+    (static_cast<double>(elapsedNs)/static_cast<double>(1000000000));                                                   
+  double payloadMbPerSecond = payloadBytesPerSecond/static_cast<double>(1024)/static_cast<double>(1024);                
+                                                                                                                        
+  printf("lcoreId: %02d, txqIndex: %02d: elsapsedNs: %lu, packetsQueued: %u, packetSizeBytes: %d, payloadSizeBytes: %lu, pps: %lf, nsPerPkt: %lf, bytesPerSec: %lf, mbPerSec: %lf, mbPerSecPayloadOnly: %lf\n", id, txqIndex, elapsedNs, state.count, packetSize, sizeof(TxMessage), pps, rateNsPerPacket, bytesPerSecond, mbPerSecond, payloadMbPerSecond);
 
   return 0;
 }

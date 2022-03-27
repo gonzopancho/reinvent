@@ -209,9 +209,7 @@ void parseCommandLine(int argc, char **argv, bool *isServer, std::string *prefix
 }
 
 int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, unsigned packetCount) {
-
   assert(config);
-  assert(mbuf.size());
 
   LocalTxState state __attribute__ ((aligned (64)));
   memset(&state, 0, sizeof(LocalTxState));
@@ -285,7 +283,7 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
 
   rte_mbuf * mbuf(0);
  
-  while (state.count<max) {
+  while (likely(state.count<max)) {
     if ((mbuf = rte_pktmbuf_alloc(pool))==0) {
       printf("failed to allocate mbuf\n");
       return 0;
@@ -359,6 +357,11 @@ int clientMainLoop(int id, int txqIndex, Reinvent::Dpdk::AWSEnaWorker *config, u
       while(1!=rte_eth_tx_burst(deviceId, state.txqId, &mbuf, 1));
     }
     ++state.count;
+
+    if (likely(!constantPorts)) {
+      ++state.srcPort;
+      ++state.dstPort;
+    }
   }
 
   struct timespec now;
