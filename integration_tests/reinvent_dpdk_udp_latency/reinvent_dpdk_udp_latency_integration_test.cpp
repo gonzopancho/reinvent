@@ -373,10 +373,11 @@ int serverMainLoop(int id, int rxqIndex, Reinvent::Dpdk::AWSEnaWorker *config) {
   clock_gettime(CLOCK_REALTIME, &end);
 
   unsigned long elapsedReceiveTimeNs = timeDifference(start, end);
-  unsigned long delayFirstPacketNs   = timeDifference(start, tsSenderFirstPacket);
+  // Sender's first packet preceeds receive start time
+  unsigned long delayFirstPacketNs   = timeDifference(tsSenderFirstPacket, start);
 
-  printf("lcoreId %02d rxqIndex %02d received %u packets delayFirstPacketNs %lu delayLastPacketNs %lu\n",
-    id, rxqIndex, count, elapsedReceiveTimeNs, delayFirstPacketNs);
+  printf("lcoreId %02d rxqIndex %02d received %u packets totalElapsedReceivedTimeNs %lu delayFirstPacketNs %lu delayLastPacketNs %lu\n",
+    id, rxqIndex, count, elapsedReceiveTimeNs, delayFirstPacketNs, delayFirstPacketNs+elapsedReceiveTimeNs);
 
   return 0;
 }
